@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.xhs_browser/
+xhs_agent.log
+xhs_links.txt
+xhs_agent_debug/
