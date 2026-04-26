@@ -97,3 +97,75 @@ python xhs_agent_batch_video.py \
 - 小样本（3 条）测试可成功采集并提交视频下载
 - 可自动跳过非视频作品
 - 能输出主页状态诊断信息（卡片数量、标题、当前 URL）
+
+---
+
+## 🆕 稳定性改进（v1.1）
+
+脚本已优化以下问题：
+
+- ✅ **会话锁清理** - 避免多次运行时的进程冲突
+- ✅ **增强错误处理** - 防止浏览器意外关闭导致无日志输出
+- ✅ **自动化隐藏标记** - 减少页面检测到自动化工具的概率
+- ✅ **持久化会话改进** - 长期会话运行更稳定
+
+### 测试改进效果
+
+```powershell
+# 运行脚本并查看详细日志
+python xhs_agent_batch_video.py `
+  --profile-url "https://..." `
+  --max-scrolls 30 `
+  --log-file "test.log"
+
+# 查看日志
+Get-Content test.log
+```
+
+---
+
+## 📦 打包成独立 .exe（开发中）
+
+如无需修改代码，建议打包为 `.exe` 文件，双击即运行：
+
+```powershell
+# 1. 安装PyInstaller (如未安装)
+pip install pyinstaller
+
+# 2. 生成exe
+python build_exe.py
+
+# 3. 输出文件
+# dist/xhs_agent.exe  <- 可直接运行
+```
+
+**详细说明：** 见 [PACKAGING.md](PACKAGING.md)
+
+### 快速使用
+
+```powershell
+# 可交互式运行（推荐）
+dist/xhs_agent.exe --profile-url "https://..." --login-wait-seconds 120
+```
+
+---
+
+## 常见问题
+
+### Q: 浏览器频繁关闭？
+**A:** 已在 v1.1 版本改进会话管理。运行前确保：
+- XHS-Downloader API 正在运行
+- 网络连接正常
+- 查看 `xhs_agent.log` 了解具体错误
+
+### Q: 登录容易被审查？
+**A:** 
+- 使用长 `--login-wait-seconds`（如 180 秒）让系统有充分时间登录
+- 脚本采集时会复用持久化会话，无需重复登录
+- 不要在短时间内频繁运行多次，容易触发审查
+
+### Q: 怎样避免触发小红书的反爬虫机制？
+**A:**
+- 设置合理的 `--request-interval`（建议 0.8~2.0 秒）
+- 不要在凌晨 0-2 点高频运行
+- 每个账号单次采集间隔不少于 1 小时

@@ -270,71 +270,104 @@ def resolve_browser_launch_options(args: argparse.Namespace) -> dict:
 def run(args: argparse.Namespace) -> int:
     user_data_dir = Path(args.user_data_dir).resolve()
     user_data_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 清理前次会话的锁文件
+    cleanup_session_locks(user_data_dir)
+    
     launch_options = resolve_browser_launch_options(args)
     log_file = Path(args.log_file).resolve() if args.log_file else None
     snapshot_dir = Path(args.snapshot_dir).resolve()
 
-    with sync_playwright() as p:
-        log_message(log_file, f"Launching browser: {launch_options['browser_label']}")
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            headless=False,
-            viewport={"width": 1440, "height": 900},
-            executable_path=launch_options.get("executable_path"),
-        )
-
-        page = context.new_page()
-        try:
-            page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=45000)
-        except PlaywrightTimeoutError:
-            log_message(log_file, "WARN: initial site open timeout; continue")
-
-        log_message(log_file, "Please log in in the opened browser window.")
-        if args.login_wait_seconds > 0:
-            log_message(log_file, f"Waiting {args.login_wait_seconds} seconds for manual login...")
-            page.wait_for_timeout(args.login_wait_seconds * 1000)
-        else:
-            input("Press Enter here after login is complete...")
-
-        try:
-            page.goto(args.profile_url, wait_until="domcontentloaded", timeout=45000)
-        except PlaywrightTimeoutError:
-            log_message(log_file, "WARN: profile page timeout; continue with current DOM")
-        try:
-            page.wait_for_selector("section.note-item", timeout=30000)
-        except PlaywrightTimeoutError:
-            log_message(log_file, "WARN: no note cards rendered on profile page")
-
-        profile_state = inspect_profile_state(page)
-        log_message(log_file, "Profile state: " + json.dumps(profile_state, ensure_ascii=False))
-        if profile_state["requires_login"] or profile_state["card_count"] == 0:
-            html_path, png_path = write_failure_snapshot(page, snapshot_dir)
-            log_message(
-                log_file,
-                "ERROR: profile page is not ready for collection. Complete login and ensure notes are visible. "
-                f"Snapshot HTML: {html_path} Screenshot: {png_path}",
+    context = None
+    try:
+        with sync_playwright() as p:
+            log_message(log_file, f"Launching browser: {launch_options['browser_label']}")
+            log_message(log_file, f"User data directory: {user_data_dir}")
+            
+            # 增强的启动参数：避免内存泄漏和进程冲突
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=str(user_data_dir),
+                headless=False,
+                viewport={"width": 1440, "height": 900},
+                executable_path=launch_options.get("executable_path"),
+                args=["--disable-blink-features=AutomationControlled"],  # 隐藏自动化标记
             )
-            context.close()
-            return 1
 
-        log_message(log_file, f"Profile page: {args.profile_url}")
-        links = auto_scroll_collect_links(
-            page=page,
-            profile_url=args.profile_url,
-            max_scrolls=args.max_scrolls,
-            pause_sec=args.scroll_pause,
-            stable_rounds=args.stable_rounds,
-            max_notes=args.max_notes,
-        )
+            page = context.new_page()
+            try:
+                page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=45000)
+            except PlaywrightTimeoutError:
+                log_message(log_file, "WARN: initial site open timeout; continue")
+            except Exception as e:
+                log_message(log_file, f"WARN: initial page load error: {e}")
 
-        if args.links_output:
-            Path(args.links_output).write_text("\n".join(links), encoding="utf-8")
-            log_message(log_file, f"Saved links to: {args.links_output}")
+            log_message(log_file, "Please log in in the opened browser window.")
+            if args.login_wait_seconds > 0:
+                log_message(log_file, f"Waiting {args.login_wait_seconds} seconds for manual login...")
+                page.wait_for_timeout(args.login_wait_seconds * 1000)
+            else:
+                input("Press Enter here after login is complete...")
 
-        log_message(log_file, f"Collected links: {len(links)}")
+            try:
+                page.goto(args.profile_url, wait_until="domcontentloaded", timeout=45000)
+            except PlaywrightTimeoutError:
+                log_message(log_file, "WARN: profile page timeout; continue with current DOM")
+            except Exception as e:
+                log_message(log_file, f"ERROR: failed to navigate to profile: {e}")
+                if context:
+                    context.close()
+                return 1
+                
+            try:
+                page.wait_for_selector("section.note-item", timeout=30000)
+            except PlaywrightTimeoutError:
+                log_message(log_file, "WARN: no note cards rendered on profile page")
 
-        cookie_header = cookies_to_header(context.cookies())
-        context.close()
+            profile_state = inspect_profile_state(page)
+            log_message(log_file, "Profile state: " + json.dumps(profile_state, ensure_ascii=False))
+            if profile_state["requires_login"] or profile_state["card_count"] == 0:
+                html_path, png_path = write_failure_snapshot(page, snapshot_dir)
+                log_message(
+                    log_file,
+                    "ERROR: profile page is not ready for collection. Complete login and ensure notes are visible. "
+                    f"Snapshot HTML: {html_path} Screenshot: {png_path}",
+                )
+                if context:
+                    context.close()
+                return 1
+
+            log_message(log_file, f"Profile page: {args.profile_url}")
+            links = auto_scroll_collect_links(
+                page=page,
+                profile_url=args.profile_url,
+                max_scrolls=args.max_scrolls,
+                pause_sec=args.scroll_pause,
+                stable_rounds=args.stable_rounds,
+                max_notes=args.max_notes,
+            )
+
+            if args.links_output:
+                Path(args.links_output).write_text("\n".join(links), encoding="utf-8")
+                log_message(log_file, f"Saved links to: {args.links_output}")
+
+            log_message(log_file, f"Collected links: {len(links)}")
+
+            try:
+                cookie_header = cookies_to_header(context.cookies())
+            except Exception as e:
+                log_message(log_file, f"ERROR: failed to extract cookies: {e}")
+                cookie_header = ""
+            
+            if context:
+                context.close()
+    except Exception as e:
+        log_message(log_file, f"CRITICAL: unexpected error: {e}")
+        if context:
+            try:
+                context.close()
+            except:
+                pass
+        return 1
 
     if not cookie_header:
         log_message(log_file, "ERROR: no xiaohongshu cookie found. Please re-run and login first.")
@@ -369,6 +402,20 @@ def run(args: argparse.Namespace) -> int:
     log_message(log_file, f"Skipped non-video: {skipped_non_video}")
     log_message(log_file, f"Failed: {failed}")
     return 0 if failed == 0 else 2
+
+
+def cleanup_session_locks(user_data_dir: Path) -> None:
+    """清理Playwright/Chrome会话锁文件，避免进程冲突."""
+    try:
+        lock_patterns = ["SingletonLock", "LockFile", ".lock", "Single Instance Mutex"]
+        for pattern in lock_patterns:
+            for lock_file in user_data_dir.glob(f"**/*{pattern}*"):
+                try:
+                    lock_file.unlink()
+                except:
+                    pass
+    except:
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:
