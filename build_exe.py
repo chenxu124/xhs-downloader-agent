@@ -35,7 +35,7 @@ def build_exe():
         "--console",
         f"--name=xhs_agent",
         f"--distpath={project_dir}/dist",
-        f"--buildpath={project_dir}/build",
+        f"--workpath={project_dir}/build",
         f"--specpath={project_dir}",
         str(script_file)
     ]
