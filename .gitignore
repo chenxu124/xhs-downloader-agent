@@ -4,3 +4,8 @@ __pycache__/
 xhs_agent.log
 xhs_links.txt
 xhs_agent_debug/
+build/
+dist/
+*.spec
+*.egg-info/
+.DS_Store
